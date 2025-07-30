@@ -3,11 +3,8 @@
 import rclpy
 import json
 import zmq
-import threading
 import cv2
-import numpy as np
-from typing import Optional
-from unitree_ros2.scripts.sport_api import SportAPI
+from go2_scripts.api.sport_api import SportAPI
 from cv_bridge import CvBridge
 from sensor_msgs.msg import Image
 from rclpy.node import Node
@@ -69,6 +66,9 @@ class Go2Node(Node):
         self.req = Request()
         self.sport_req_builder = SportAPI()
         
+        # 线程控制变量
+        self._running = True
+        
         ################ 服务器 ZMQ ################
         # 初始化ZMQ
         self._cmd_zmq_context = zmq.Context()
@@ -88,6 +88,8 @@ class Go2Node(Node):
 
     def stop_zmq_listener(self):
         """停止ZMQ监听器"""
+        self._running = False
+        
         if self._cmd_zmq_socket:
             self._cmd_zmq_socket.close()
         if self._cmd_zmq_context:
