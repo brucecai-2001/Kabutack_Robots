@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+from traceback import print_tb
 import rclpy
 import json
 import zmq
@@ -14,6 +15,26 @@ from unitree_api.msg import Request
 class Go2Node(Node):
     def __init__(self):
         super().__init__('kabutack_go2')
+        
+        ################ 服务器 ZMQ ################
+        # 初始化ZMQ
+        self._cmd_zmq_context = zmq.Context()
+        self._cmd_zmq_socket = self._cmd_zmq_context.socket(zmq.PULL)
+        self._cmd_zmq_socket.setsockopt(zmq.CONFLATE, 1)
+        self._cmd_zmq_socket.connect("tcp://192.168.31.158:5555")
+
+        self._image_zmq_context = zmq.Context()
+        self._image_zmq_socket = self._image_zmq_context.socket(zmq.PUSH)
+        self._image_zmq_socket.setsockopt(zmq.CONFLATE, 1)
+        self._image_zmq_socket.bind("tcp://*:5556")  # 图像发布端口
+
+        self._state_zmq_context = zmq.Context()
+        self._state_zmq_socket = self._state_zmq_context.socket(zmq.PUSH)
+        self._state_zmq_socket.setsockopt(zmq.CONFLATE, 1)
+        self._state_zmq_socket.bind("tcp://*:5557") # 状态发布端口
+
+        print("ZMQ servers initialized.")
+        print("Waiting for commands...")
         
         ################# 订阅 状态,图像 ##################
         # 创建状态订阅者，订阅'sportmodestate'话题
@@ -47,6 +68,8 @@ class Go2Node(Node):
         self.py0 = 0.0  # 初始y位置
         self.yaw0 = 0.0  # 初始yaw角度
 
+        print("State subscriber initialized.")
+
         # 图像
         self._bridge = CvBridge()
         self.raw_camera_suber = self.create_subscription(
@@ -54,6 +77,8 @@ class Go2Node(Node):
                     "raw", 
                     self.raw_image_callback,
                     10)
+
+        print("Image subscriber initialized.")
         
         ################ 发布 动作 ##################
         # 创建请求发布者，发布到'/api/sport/request'话题
@@ -65,26 +90,11 @@ class Go2Node(Node):
          # 创建请求消息和运动客户端
         self.req = Request()
         self.sport_req_builder = SportAPI()
+
+        print("Action publisher initialized.")
         
         # 线程控制变量
         self._running = True
-        
-        ################ 服务器 ZMQ ################
-        # 初始化ZMQ
-        self._cmd_zmq_context = zmq.Context()
-        self._cmd_zmq_socket = self._cmd_zmq_context.socket(zmq.SUB)
-        self._cmd_zmq_socket.setsockopt(zmq.CONFLATE, 1)
-        self._cmd_zmq_socket.bind("tcp://*:5555")
-
-        self._image_zmq_context = zmq.Context()
-        self._image_zmq_socket = self._image_zmq_context.socket(zmq.PUB)
-        self._image_zmq_socket.setsockopt(zmq.CONFLATE, 1)
-        self._image_zmq_socket.bind("tcp://*:5556")  # 图像发布端口
-
-        self._state_zmq_context = zmq.Context()
-        self._state_zmq_socket = self._state_zmq_context.socket(zmq.PUB)
-        self._state_zmq_socket.setsockopt(zmq.CONFLATE, 1)
-        self._state_zmq_socket.bind("tcp://*:5557") # 状态发布端口
 
     def stop_zmq_listener(self):
         """停止ZMQ监听器"""
@@ -129,7 +139,7 @@ class Go2Node(Node):
     
     def state_callback(self, data):
         # 更新所有状态信息
-        self.timestamp = data.timestamp
+        self.timestamp = data.stamp
         self.error_code = data.error_code
         self.mode = data.mode
         self.gait_type = data.gait_type
@@ -140,14 +150,13 @@ class Go2Node(Node):
         
         # 更新IMU状态
         self.quaternion = list(data.imu_state.quaternion)
-        self.angular_velocity = list(data.imu_state.angular_velocity)
-        self.rpy = list(data.imu_state.rpy)
+        self.gyroscope = list(data.imu_state.gyroscope)
+        self.accelerometer = list(data.imu_state.accelerometer)
         
         # 更新足端状态
         for i in range(4):
-            self.foot_force[i] = list(data.foot_force[i])
-            self.foot_position[i] = list(data.foot_position[i])
-            self.contact[i] = data.contact[i]
+            self.foot_force[i] = data.foot_force[i]
+            self.foot_position[i] = data.foot_position_body[i]
         
         # 当t<0时获取机器人当前位置作为初始坐标系
         if self.t < 0:
@@ -158,20 +167,18 @@ class Go2Node(Node):
             print(f"当前模式: {self.mode}, 步态类型: {self.gait_type}")
             self.t = 0
         
-        # 通过ZMQ发布状态数据
+        # 通过ZMQ发布状态数据 - 确保所有数据都是JSON可序列化的类型
         state_data = {
-            'timestamp': self.timestamp,
-            'error_code': self.error_code,
-            'mode': self.mode,
-            'gait_type': self.gait_type,
-            'position': self.position,
-            'velocity': self.velocity,
-            'quaternion': self.quaternion,
-            'angular_velocity': self.angular_velocity,
-            'rpy': self.rpy,
-            'foot_force': self.foot_force,
-            'foot_position': self.foot_position,
-            'contact': self.contact
+            'error_code': int(self.error_code),
+            'mode': int(self.mode),
+            'gait_type': int(self.gait_type),
+            'position': [float(x) for x in self.position],
+            'velocity': [float(x) for x in self.velocity],
+            'quaternion': [float(x) for x in self.quaternion],
+            'gyroscope': [float(x) for x in self.gyroscope],
+            'accelerometer': [float(x) for x in self.accelerometer],
+            'foot_force': [float(force) for force in self.foot_force],
+            'foot_position': [float(pos) for pos in self.foot_position],
         }
         
         try:
@@ -195,12 +202,51 @@ class Go2Node(Node):
         self.stop_zmq_listener()
 
 def main(args=None):
-    rclpy.init(args=args)  # 初始化rclpy
+    """主函数，带有完善的异常处理和资源清理"""
+    go2_node = None
+    
+    try:
+        # 初始化rclpy
+        rclpy.init(args=args)
+        
+        # 创建运动请求节点
+        go2_node = Go2Node()
+        
+        # 启动ZMQ监听线程
+        import threading
+        zmq_thread = threading.Thread(target=go2_node._zmq_listen_loop, daemon=True)
+        zmq_thread.start()
+        
+        print("Go2 Node started successfully. Press Ctrl+C to stop.")
+        
+        # 运行ROS2节点
+        rclpy.spin(go2_node)
+        
+    except KeyboardInterrupt:
+        print("\nReceived interrupt signal. Shutting down gracefully...")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        # 确保资源正确清理
+        if go2_node is not None:
+            try:
+                go2_node.stop_zmq_listener()
+                go2_node.destroy_node()
+            except Exception as e:
+                print(f"Error during cleanup: {e}")
+        
+        # 关闭rclpy
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except Exception as e:
+            print(f"Error shutting down rclpy: {e}")
+        
+        print("Shutdown complete.")
 
-    sport_node = Go2Node()  # 创建运动请求节点
-    rclpy.spin(sport_node)  # 运行ROS2节点
-
-    sport_node.destroy_node()
+    go2_node.destroy_node()
     rclpy.shutdown()
 
 if __name__ == '__main__':

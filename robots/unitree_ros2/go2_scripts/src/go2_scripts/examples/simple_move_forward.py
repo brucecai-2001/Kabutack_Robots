@@ -53,14 +53,13 @@ class SimpleMoveForward(Node):
         # 等待一段时间后关闭节点
         time.sleep(2.0)
         self.get_logger().info('任务完成，关闭节点')
-        rclpy.shutdown()
 
 def main(args=None):
     rclpy.init(args=args)
     
     try:
         move_node = SimpleMoveForward()
-        rclpy.spin(move_node)
+
     except KeyboardInterrupt:
         print('\n用户中断，停止程序')
     except Exception as e:
