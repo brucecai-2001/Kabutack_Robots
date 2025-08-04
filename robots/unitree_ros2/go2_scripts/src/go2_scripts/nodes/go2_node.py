@@ -138,6 +138,9 @@ class Go2Node(Node):
                 self.get_logger().error(f"处理ZMQ消息时出错: {e}")
     
     def state_callback(self, data):
+        """
+        状态回调函数，用于处理接收到的机器人状态信息。
+        """
         # 更新所有状态信息
         self.timestamp = data.stamp
         self.error_code = data.error_code
@@ -177,6 +180,7 @@ class Go2Node(Node):
             'quaternion': [float(x) for x in self.quaternion],
             'gyroscope': [float(x) for x in self.gyroscope],
             'accelerometer': [float(x) for x in self.accelerometer],
+            'rpy': [float(x) for x in self.rpy],
             'foot_force': [float(force) for force in self.foot_force],
             'foot_position': [float(pos) for pos in self.foot_position],
         }
